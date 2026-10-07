@@ -2,8 +2,6 @@
 
 A simple Pomodoro timer and task tracker in a single web page. No installs, no frameworks, no backend.
 
-**Live demo:** `https://<your-username>.github.io/focusboard/`
-
 ## Features
 
 - 25-minute focus and 5-minute break timer with a progress ring
