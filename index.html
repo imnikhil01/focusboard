@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FocusBoard</title>
+<style>
+  :root {
+    --bg: #10182b;
+    --panel: #18223b;
+    --line: #2a3658;
+    --text: #eef1f7;
+    --muted: #8d99b8;
+    --accent: #ff6a3d;
+    --break: #4fd1a5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px 48px;
+  }
+  main { width: 100%; max-width: 440px; }
+  h1 { font-size: 1.4rem; margin: 0 0 20px; letter-spacing: .5px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab {
+    flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+    background: transparent; color: var(--muted); font: inherit; cursor: pointer;
+  }
+  .tab.active { background: var(--panel); color: var(--text); border-color: var(--mode); }
+  .timer { position: relative; width: 260px; height: 260px; margin: 0 auto 20px; }
+  .timer svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .track { stroke: var(--line); }
+  .bar { stroke: var(--mode); transition: stroke-dashoffset .4s linear; }
+  .time {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 3.4rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .controls { display: flex; gap: 10px; justify-content: center; margin-bottom: 8px; }
+  button.main {
+    padding: 12px 34px; border: 0; border-radius: 12px; background: var(--mode);
+    color: #10182b; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  button.ghost {
+    padding: 12px 20px; border-radius: 12px; border: 1px solid var(--line);
+    background: transparent; color: var(--text); font: inherit; cursor: pointer;
+  }
+  .stat { text-align: center; color: var(--muted); margin: 14px 0 28px; }
+  .stat b { color: var(--text); font-size: 1.1rem; }
+  form { display: flex; gap: 8px; margin-bottom: 14px; }
+  input[type=text] {
+    flex: 1; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); font: inherit;
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: flex; align-items: center; gap: 12px; padding: 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px;
+  }
+  li span { flex: 1; word-break: break-word; }
+  li.done span { text-decoration: line-through; color: var(--muted); }
+  li input { width: 18px; height: 18px; accent-color: var(--accent); }
+  li button { background: none; border: 0; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
+  li button:hover { color: var(--accent); }
+  .empty { color: var(--muted); text-align: center; padding: 16px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--mode); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main style="--mode: var(--accent)" id="app">
+  <h1>FocusBoard</h1>
+
+  <div class="tabs">
+    <button class="tab active" data-mode="focus">Focus 25</button>
+    <button class="tab" data-mode="break">Break 5</button>
+  </div>
+
+  <div class="timer">
+    <svg viewBox="0 0 120 120">
+      <circle class="track" cx="60" cy="60" r="54" fill="none" stroke-width="7"/>
+      <circle class="bar" id="bar" cx="60" cy="60" r="54" fill="none" stroke-width="7" stroke-linecap="round"/>
+    </svg>
+    <div class="time" id="time">25:00</div>
+  </div>
+
+  <div class="controls">
+    <button class="main" id="start">Start</button>
+    <button class="ghost" id="reset">Reset</button>
+  </div>
+  <p class="stat">Sessions finished today: <b id="count">0</b></p>
+
+  <form id="form">
+    <input type="text" id="task" placeholder="What are you working on?" maxlength="120" autocomplete="off">
+    <button class="main" type="submit">Add</button>
+  </form>
+  <ul id="list"></ul>
+</main>
+
+<script>
+(function () {
+  var DURATION = { focus: 25 * 60, break: 5 * 60 };
+  var C = 2 * Math.PI * 54;
+  var app = document.getElementById('app');
+  var bar = document.getElementById('bar');
+  var timeEl = document.getElementById('time');
+  var startBtn = document.getElementById('start');
+  var countEl = document.getElementById('count');
+  var listEl = document.getElementById('list');
+  var tabs = document.querySelectorAll('.tab');
+
+  var mode = 'focus', left = DURATION.focus, endAt = null, tick = null;
+  bar.style.strokeDasharray = C;
+
+  // ---- storage (safe if blocked) ----
+  function load(key, fallback) {
+    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+    catch (e) { return fallback; }
+  }
+  function save(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+  }
+  var today = new Date().toDateString();
+  var stats = load('fb_stats', { day: today, n: 0 });
+  if (stats.day !== today) stats = { day: today, n: 0 };
+  var tasks = load('fb_tasks', []);
+
+  // ---- timer ----
+  function fmt(s) {
+    var m = Math.floor(s / 60), r = s % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+  }
+  function draw() {
+    timeEl.textContent = fmt(left);
+    bar.style.strokeDashoffset = C * (1 - left / DURATION[mode]);
+    document.title = (tick ? fmt(left) + ' · ' : '') + 'FocusBoard';
+  }
+  function beep() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880; g.gain.value = 0.15;
+      o.start(); o.stop(ctx.currentTime + 0.5);
+    } catch (e) {}
+  }
+  function stop() { clearInterval(tick); tick = null; startBtn.textContent = 'Start'; }
+  function setMode(m) {
+    stop(); mode = m; left = DURATION[m];
+    app.style.setProperty('--mode', m === 'focus' ? 'var(--accent)' : 'var(--break)');
+    tabs.forEach(function (t) { t.classList.toggle('active', t.dataset.mode === m); });
+    draw();
+  }
+  function finish() {
+    stop(); beep();
+    if (mode === 'focus') {
+      stats.n++; save('fb_stats', stats); countEl.textContent = stats.n;
+      setMode('break');
+    } else { setMode('focus'); }
+  }
+  function toggle() {
+    if (tick) { stop(); draw(); return; }
+    endAt = Date.now() + left * 1000;
+    startBtn.textContent = 'Pause';
+    tick = setInterval(function () {
+      left = Math.max(0, Math.round((endAt - Date.now()) / 1000));
+      draw();
+      if (left === 0) finish();
+    }, 250);
+  }
+  startBtn.addEventListener('click', toggle);
+  document.getElementById('reset').addEventListener('click', function () { setMode(mode); });
+  tabs.forEach(function (t) { t.addEventListener('click', function () { setMode(t.dataset.mode); }); });
+
+  // ---- tasks ----
+  function render() {
+    listEl.innerHTML = '';
+    if (!tasks.length) {
+      var e = document.createElement('li');
+      e.className = 'empty'; e.style.display = 'block';
+      e.textContent = 'No tasks yet. Add the one thing you want to finish first.';
+      listEl.appendChild(e); return;
+    }
+    tasks.forEach(function (t, i) {
+      var li = document.createElement('li');
+      if (t.done) li.className = 'done';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = t.done;
+      cb.setAttribute('aria-label', 'Mark done');
+      cb.addEventListener('change', function () { t.done = cb.checked; save('fb_tasks', tasks); render(); });
+      var sp = document.createElement('span'); sp.textContent = t.text;
+      var del = document.createElement('button');
+      del.textContent = '\u00d7'; del.setAttribute('aria-label', 'Delete task');
+      del.addEventListener('click', function () { tasks.splice(i, 1); save('fb_tasks', tasks); render(); });
+      li.appendChild(cb); li.appendChild(sp); li.appendChild(del);
+      listEl.appendChild(li);
+    });
+  }
+  document.getElementById('form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var input = document.getElementById('task');
+    var text = input.value.trim();
+    if (!text) return;
+    tasks.unshift({ text: text, done: false });
+    save('fb_tasks', tasks); input.value = ''; render();
+  });
+
+  countEl.textContent = stats.n;
+  draw(); render();
+})();
+</script>
+</body>
+</html>
